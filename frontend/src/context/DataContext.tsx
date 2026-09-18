@@ -25,7 +25,7 @@ import { readCache, writeCache } from '../lib/cache'
 import { eventIsExpired, eventStart, toISODate } from '../lib/dates'
 import { friendlyError } from '../lib/errors'
 import { coupleMemberIds } from '../lib/members'
-import { applyPetAction, decayPet, defaultPet, petAlerts } from '../lib/pet'
+import { applyPetAction, decayPet, defaultPet, ensurePet, petAlerts } from '../lib/pet'
 import { emailDocId, normalizeEmail, roleLabel } from '../lib/roles'
 import type {
   ActivityLog,
@@ -236,9 +236,19 @@ async function liveMembers(couple: Couple) {
   return coupleMemberIds(couple)
 }
 
+function readCachedCouple(): Couple | null {
+  const raw = readCache<Record<string, unknown> | null>('couple', null)
+  if (!raw || typeof raw !== 'object' || !raw.id) return null
+  try {
+    return asCouple(String(raw.id), raw)
+  } catch {
+    return null
+  }
+}
+
 export function DataProvider({ children }: { children: ReactNode }) {
   const { user, profile, patchProfile } = useAuth()
-  const [couple, setCouple] = useState<Couple | null>(() => readCache('couple', null))
+  const [couple, setCouple] = useState<Couple | null>(() => readCachedCouple())
   const [partner, setPartner] = useState<UserProfile | null>(() => readCache('partner', null))
   const [events, setEvents] = useState<CoupleEvent[]>(() => readCache('events', []))
   const [logs, setLogs] = useState<ActivityLog[]>(() => readCache('logs', []))
@@ -313,6 +323,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
         writeCache('couple', next)
         if (next.members.length >= 2 && (snap.data().members || []).length < 2) {
           void updateDoc(snap.ref, { members: next.members }).catch(() => {})
+        }
+        if (!snap.data().pet) {
+          void updateDoc(snap.ref, { pet: next.pet }).catch(() => {})
         }
       },
       (err) => pushToast(friendlyError(err)),
@@ -830,7 +843,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const carePet = useCallback(
     async (action: PetAction) => {
       if (!user || !profile || !couple) throw new Error('Bond first')
-      const pet = applyPetAction(couple.pet || defaultPet(), action)
+      const pet = applyPetAction(ensurePet(couple.pet), action)
       await updateDoc(doc(db, 'couples', couple.id), { pet, loveScore: (couple.loveScore || 0) + 1 })
       if (profile.partnerUid) {
         const verb = action === 'feed' ? 'fed' : action === 'toilet' ? 'took to the toilet' : action === 'sleep' ? 'tucked in' : action === 'wake' ? 'woke' : 'played with'
@@ -841,7 +854,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       )
       if (profile.notificationsEnabled && profile.notifyPet && Notification.permission === 'granted') {
         try {
-          new Notification(`${couple.pet.name}`, { body: `You ${action}ed the wizard frog.`, icon: '/pet-frog.png' })
+          new Notification(`${pet.name}`, { body: `You ${action}ed the wizard frog.`, icon: '/pet-frog.png' })
         } catch {
           // ignore
         }

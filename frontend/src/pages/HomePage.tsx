@@ -25,16 +25,20 @@ export function HomePage() {
         <div>
           <p className="kicker">{profile?.role === 'gf' ? 'GIRLFRIEND' : 'BOYFRIEND'}</p>
           <h1>HEY {profile?.displayName?.toUpperCase()}</h1>
-          <p className="muted">{couple ? `${couple.bfNick} + ${couple.gfNick} · streak ${couple.streak}` : 'Bond to unlock the shared map'}</p>
+          <p className="muted">
+            {couple
+              ? `${couple.bfNick || couple.bfName} + ${couple.gfNick || couple.gfName} · streak ${couple.streak || 0}`
+              : 'Bond to unlock the shared map'}
+          </p>
         </div>
       </section>
 
       {couple ? (
         <Link to="/pet" className="pet-teaser">
-          <img src="/pet-frog.png" alt={couple.pet.name} />
+          <img src="/pet-frog.png" alt={couple.pet?.name || 'WIZ FROG'} />
           <div>
             <p className="kicker">{petMood(couple.pet)}</p>
-            <h2>{couple.pet.name}</h2>
+            <h2>{couple.pet?.name || 'WIZ FROG'}</h2>
             <p className="muted">Tap to feed, toilet, or sleep</p>
           </div>
         </Link>

@@ -4,7 +4,7 @@ import { PixelButton } from '../components/PixelButton'
 import { PixelEmoji } from '../components/PixelEmoji'
 import { useAuth } from '../context/AuthContext'
 import { useData } from '../context/DataContext'
-import { petLevel, petMood } from '../lib/pet'
+import { ensurePet, petLevel, petMood } from '../lib/pet'
 
 function Bar({ label, value, color }: { label: string; value: number; color: string }) {
   return (
@@ -40,7 +40,7 @@ export function PetPage() {
       </div>
     )
   }
-  const pet = couple.pet
+  const pet = ensurePet(couple.pet)
   const mood = petMood(pet)
   async function act(action: 'feed' | 'toilet' | 'sleep' | 'wake' | 'play') {
     setBusy(action)

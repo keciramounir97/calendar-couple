@@ -3,13 +3,14 @@ import { PixelEmoji } from '../components/PixelEmoji'
 import { useAuth } from '../context/AuthContext'
 import { useData } from '../context/DataContext'
 import { useState } from 'react'
+import { ensurePet } from '../lib/pet'
 import type { UiTheme } from '../types'
 
 export function SettingsPage() {
   const { profile, patchProfile, signOut } = useAuth()
   const { couple, enableAlerts, pushToast, updateCouple } = useData()
   const [name, setName] = useState(profile?.displayName || '')
-  const [petName, setPetName] = useState(couple?.pet.name || 'WIZ FROG')
+  const [petName, setPetName] = useState(couple?.pet?.name || 'WIZ FROG')
   const [anniversary, setAnniversary] = useState(couple?.anniversary || '')
   const [bfNick, setBfNick] = useState(couple?.bfNick || couple?.bfName || '')
   const [gfNick, setGfNick] = useState(couple?.gfNick || couple?.gfName || '')
@@ -24,7 +25,7 @@ export function SettingsPage() {
   async function saveCouple() {
     if (!couple) return
     await updateCouple({
-      pet: { ...couple.pet, name: petName.trim() || 'WIZ FROG' },
+      pet: { ...ensurePet(couple.pet), name: petName.trim() || 'WIZ FROG' },
       anniversary: anniversary || null,
       bfNick: bfNick.trim() || couple.bfName,
       gfNick: gfNick.trim() || couple.gfName,

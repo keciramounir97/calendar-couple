@@ -85,11 +85,16 @@ export function petAlerts(pet: PetState) {
   return alerts
 }
 
-export function petMood(pet: PetState) {
-  if (pet.sleeping) return 'SLEEPING'
-  if (pet.hunger <= 25) return 'STARVING'
-  if (pet.bladder >= 80) return 'DANCING'
-  if (pet.energy <= 20) return 'EXHAUSTED'
-  if (pet.hunger > 70 && pet.energy > 60 && pet.bladder < 40) return 'HAPPY'
+export function ensurePet(pet?: PetState | null): PetState {
+  return decayPet(pet && typeof pet.name === 'string' ? pet : defaultPet())
+}
+
+export function petMood(pet?: PetState | null) {
+  const p = ensurePet(pet)
+  if (p.sleeping) return 'SLEEPING'
+  if (p.hunger <= 25) return 'STARVING'
+  if (p.bladder >= 80) return 'DANCING'
+  if (p.energy <= 20) return 'EXHAUSTED'
+  if (p.hunger > 70 && p.energy > 60 && p.bladder < 40) return 'HAPPY'
   return 'OKAY'
 }
