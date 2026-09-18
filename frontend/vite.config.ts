@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'apple-touch-icon.png'],
+      includeAssets: ['favicon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'apple-touch-icon.png', 'pet-frog.png'],
       manifest: {
         name: 'Calendar Couple',
         short_name: 'CplCal',

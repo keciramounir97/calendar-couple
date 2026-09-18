@@ -44,6 +44,12 @@ function toProfile(uid: string, data: Record<string, unknown>): UserProfile {
     partnerEmail: (data.partnerEmail as string | null) ?? null,
     partnerUid: (data.partnerUid as string | null) ?? null,
     notificationsEnabled: Boolean(data.notificationsEnabled),
+    notifyEvents: data.notifyEvents !== false,
+    notifyPet: data.notifyPet !== false,
+    notifyNotes: data.notifyNotes !== false,
+    quietStart: (data.quietStart as string | null) ?? null,
+    quietEnd: (data.quietEnd as string | null) ?? null,
+    uiTheme: data.uiTheme === 'cyan' || data.uiTheme === 'gold' ? data.uiTheme : 'pink',
     createdAt: Number(data.createdAt || Date.now()),
   }
 }
@@ -127,6 +133,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         partnerEmail: existing.exists() ? (existing.data().partnerEmail ?? null) : null,
         partnerUid: existing.exists() ? (existing.data().partnerUid ?? null) : null,
         notificationsEnabled: existing.exists() ? Boolean(existing.data().notificationsEnabled) : false,
+        notifyEvents: true,
+        notifyPet: true,
+        notifyNotes: true,
+        quietStart: null,
+        quietEnd: null,
+        uiTheme: 'pink',
         createdAt,
       }
       await setDoc(doc(db, 'users', user.uid), {

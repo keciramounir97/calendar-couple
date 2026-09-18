@@ -1,4 +1,5 @@
 import { Link, Outlet } from 'react-router-dom'
+import { useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useData } from '../context/DataContext'
 import { BottomNav } from './BottomNav'
@@ -10,6 +11,9 @@ export function Layout() {
   const { profile } = useAuth()
   const { couple, toasts, pendingInviteCount, pendingEventCount } = useData()
   const alertCount = pendingInviteCount + pendingEventCount
+  useEffect(() => {
+    document.documentElement.dataset.theme = profile?.uiTheme || couple?.theme || 'pink'
+  }, [profile?.uiTheme, couple?.theme])
 
   return (
     <div className="app-shell">

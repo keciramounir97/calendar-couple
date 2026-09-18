@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { PixelButton } from '../components/PixelButton'
 import { PixelEmoji } from '../components/PixelEmoji'
 import { useAuth } from '../context/AuthContext'
@@ -9,10 +9,13 @@ import { oppositeRole, roleLabel } from '../lib/roles'
 import { EMOJIS, THEMES, type AssignedTo, type EventTheme } from '../types'
 
 export function AddEventPage() {
+  const { id: routeId } = useParams()
   const { profile } = useAuth()
-  const { couple, addEvent } = useData()
+  const { couple, events, addEvent, updateEvent, deleteEvent } = useData()
   const [params] = useSearchParams()
   const navigate = useNavigate()
+  const id = routeId || params.get('id') || undefined
+  const existing = events.find((e) => e.id === id)
   const [title, setTitle] = useState('')
   const [theme, setTheme] = useState<EventTheme>('date')
   const [emoji, setEmoji] = useState('💖')
@@ -22,6 +25,17 @@ export function AddEventPage() {
   const [assignedTo, setAssignedTo] = useState<AssignedTo>('both')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+
+  useEffect(() => {
+    if (!existing) return
+    setTitle(existing.title)
+    setTheme(existing.theme)
+    setEmoji(existing.emoji)
+    setDate(existing.date)
+    setUseHour(Boolean(existing.hour))
+    setHour(existing.hour || '19:00')
+    setAssignedTo(existing.assignedTo)
+  }, [existing])
 
   const whoOptions = useMemo(() => {
     if (!profile) return []
@@ -39,8 +53,17 @@ export function AddEventPage() {
     return (
       <div className="empty-card">
         <PixelEmoji emoji="🔒" size="lg" />
-        <p>BOND FIRST. THIS APP WONT SAVE SOLO QUESTS.</p>
-        <PixelButton onClick={() => navigate('/bond')}>ENTER PARTNER EMAIL</PixelButton>
+        <p>Bond first to save couple quests.</p>
+        <PixelButton onClick={() => navigate('/bond')}>Enter partner email</PixelButton>
+      </div>
+    )
+  }
+
+  if (id && !existing) {
+    return (
+      <div className="empty-card">
+        <p>Quest not found.</p>
+        <PixelButton onClick={() => navigate('/month')}>Back to calendar</PixelButton>
       </div>
     )
   }
@@ -51,21 +74,16 @@ export function AddEventPage() {
       onSubmit={async (e) => {
         e.preventDefault()
         if (!title.trim()) {
-          setErr('NAME THE QUEST')
+          setErr('Name the quest')
           return
         }
         setBusy(true)
         setErr('')
         try {
-          await addEvent({
-            title,
-            theme,
-            emoji,
-            date,
-            hour: useHour ? hour : null,
-            assignedTo,
-          })
-          navigate('/')
+          const payload = { title, theme, emoji, date, hour: useHour ? hour : null, assignedTo }
+          if (id) await updateEvent(id, payload)
+          else await addEvent(payload)
+          navigate(id ? `/event/${id}` : '/month')
         } catch (error) {
           setErr((error as Error).message || 'SAVE FAILED')
           setBusy(false)
@@ -73,11 +91,12 @@ export function AddEventPage() {
       }}
     >
       <h1>
-        <PixelEmoji emoji="✨" size="sm" /> NEW QUEST
+        <PixelEmoji emoji="✨" size="sm" /> {id ? 'EDIT QUEST' : 'NEW QUEST'}
       </h1>
+      <p className="muted">{id ? 'Change it, then save. Or erase it forever.' : 'Tap a day on the calendar, or fill this in.'}</p>
       <label className="field">
         EVENT NAME
-        <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={60} placeholder="PIZZA DATE" />
+        <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={60} placeholder="Pizza date" />
       </label>
       <p className="label">THEME</p>
       <div className="theme-row">
@@ -96,7 +115,7 @@ export function AddEventPage() {
           </button>
         ))}
       </div>
-      <p className="label">PIXEL EMOJI</p>
+      <p className="label">EMOJI</p>
       <div className="emoji-row">
         {EMOJIS.map((em) => (
           <button type="button" key={em} className={`emoji-pick ${emoji === em ? 'on' : ''}`} onClick={() => setEmoji(em)}>
@@ -110,7 +129,7 @@ export function AddEventPage() {
       </label>
       <label className="check">
         <input type="checkbox" checked={useHour} onChange={(e) => setUseHour(e.target.checked)} />
-        SPECIFY HOUR (FOR REVEIL ALARM)
+        Set an hour (alarm)
       </label>
       {useHour ? (
         <label className="field">
@@ -118,7 +137,7 @@ export function AddEventPage() {
           <input type="time" value={hour} onChange={(e) => setHour(e.target.value)} />
         </label>
       ) : null}
-      <p className="label">WHO IS THIS FOR?</p>
+      <p className="label">WHO?</p>
       <div className="who-row">
         {whoOptions.map((opt) => (
           <button
@@ -131,15 +150,29 @@ export function AddEventPage() {
           </button>
         ))}
       </div>
-      <p className="muted">
-        {assignedTo === profile?.role
-          ? 'SAVES STRAIGHT TO THE SHARED MAP.'
-          : 'PARTNER MUST GREEN-CHECK BEFORE IT LANDS ON THEIR CALENDAR.'}
-      </p>
       {err ? <p className="error">{err}</p> : null}
       <PixelButton type="submit" disabled={busy}>
-        {busy ? 'SAVING...' : 'CREATE CARD'}
+        {busy ? 'SAVING...' : id ? 'SAVE CHANGES' : 'CREATE CARD'}
       </PixelButton>
+      {existing ? (
+        <PixelButton
+          variant="red"
+          disabled={busy}
+          onClick={async () => {
+            if (!window.confirm(`Erase "${existing.title}"?`)) return
+            setBusy(true)
+            try {
+              await deleteEvent(existing)
+              navigate('/month')
+            } catch (error) {
+              setErr((error as Error).message)
+              setBusy(false)
+            }
+          }}
+        >
+          ERASE QUEST
+        </PixelButton>
+      ) : null}
     </form>
   )
 }

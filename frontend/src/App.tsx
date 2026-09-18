@@ -8,12 +8,14 @@ import { LoginPage } from './pages/LoginPage'
 
 const HomePage = lazy(() => import('./pages/HomePage').then((m) => ({ default: m.HomePage })))
 const MonthPage = lazy(() => import('./pages/MonthPage').then((m) => ({ default: m.MonthPage })))
-const WeekPage = lazy(() => import('./pages/WeekPage').then((m) => ({ default: m.WeekPage })))
 const AddEventPage = lazy(() => import('./pages/AddEventPage').then((m) => ({ default: m.AddEventPage })))
 const InboxPage = lazy(() => import('./pages/InboxPage').then((m) => ({ default: m.InboxPage })))
 const BondPage = lazy(() => import('./pages/BondPage').then((m) => ({ default: m.BondPage })))
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
 const SetupPage = lazy(() => import('./pages/SetupPage').then((m) => ({ default: m.SetupPage })))
+const LovePage = lazy(() => import('./pages/LovePage').then((m) => ({ default: m.LovePage })))
+const PetPage = lazy(() => import('./pages/PetPage').then((m) => ({ default: m.PetPage })))
+const EventPage = lazy(() => import('./pages/EventPage').then((m) => ({ default: m.EventPage })))
 
 function Boot() {
   return (
@@ -73,8 +75,11 @@ function AppRoutes() {
         >
           <Route path="/" element={<HomePage />} />
           <Route path="/month" element={<MonthPage />} />
-          <Route path="/week" element={<WeekPage />} />
+          <Route path="/week" element={<MonthPage />} />
           <Route path="/add" element={<AddEventPage />} />
+          <Route path="/event/:id" element={<EventPage />} />
+          <Route path="/pet" element={<PetPage />} />
+          <Route path="/love" element={<LovePage />} />
           <Route path="/inbox" element={<InboxPage />} />
           <Route path="/bond" element={<BondPage />} />
           <Route path="/settings" element={<SettingsPage />} />

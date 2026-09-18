@@ -22,9 +22,10 @@ import {
 } from 'react'
 import { db } from '../firebase'
 import { readCache, writeCache } from '../lib/cache'
-import { eventIsExpired, eventStart } from '../lib/dates'
+import { eventIsExpired, eventStart, toISODate } from '../lib/dates'
 import { friendlyError } from '../lib/errors'
 import { coupleMemberIds } from '../lib/members'
+import { applyPetAction, decayPet, defaultPet, petAlerts } from '../lib/pet'
 import { emailDocId, normalizeEmail, roleLabel } from '../lib/roles'
 import type {
   ActivityLog,
@@ -33,26 +34,24 @@ import type {
   Couple,
   CoupleEvent,
   EmailIndex,
+  EventInput,
   EventTheme,
   Invitation,
+  LoveNote,
+  PetAction,
+  PetState,
   UserProfile,
+  WishItem,
 } from '../types'
 import { useAuth } from './AuthContext'
-
-interface NewEventInput {
-  title: string
-  theme: EventTheme
-  emoji: string
-  date: string
-  hour: string | null
-  assignedTo: AssignedTo
-}
 
 interface DataState {
   couple: Couple | null
   partner: UserProfile | null
   events: CoupleEvent[]
   logs: ActivityLog[]
+  notes: LoveNote[]
+  wishes: WishItem[]
   invitationsIn: Invitation[]
   invitationsOut: Invitation[]
   notifications: AppNotification[]
@@ -65,11 +64,21 @@ interface DataState {
   cancelInvite: (id: string) => Promise<void>
   acceptInvite: (inv: Invitation) => Promise<void>
   declineInvite: (inv: Invitation) => Promise<void>
-  addEvent: (input: NewEventInput) => Promise<void>
+  addEvent: (input: EventInput) => Promise<void>
+  updateEvent: (id: string, input: EventInput) => Promise<void>
+  deleteEvent: (ev: CoupleEvent) => Promise<void>
   acceptEvent: (ev: CoupleEvent) => Promise<void>
   declineEvent: (ev: CoupleEvent) => Promise<void>
   markNotificationRead: (id: string) => Promise<void>
   enableAlerts: () => Promise<boolean>
+  carePet: (action: PetAction) => Promise<void>
+  sendNote: (text: string) => Promise<void>
+  addWish: (title: string) => Promise<void>
+  toggleWish: (wish: WishItem) => Promise<void>
+  deleteWish: (wish: WishItem) => Promise<void>
+  sendLove: (kind: 'kiss' | 'hug' | 'nudge') => Promise<void>
+  checkIn: () => Promise<void>
+  updateCouple: (patch: Record<string, unknown>) => Promise<void>
 }
 
 const DataContext = createContext<DataState | null>(null)
@@ -136,6 +145,46 @@ function asNotif(id: string, data: Record<string, unknown>): AppNotification {
   }
 }
 
+function asPet(raw: unknown): PetState {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  return decayPet({
+    ...defaultPet(String(data.name || 'WIZ FROG')),
+    hunger: Number(data.hunger ?? 72),
+    bladder: Number(data.bladder ?? 18),
+    energy: Number(data.energy ?? 80),
+    xp: Number(data.xp ?? 0),
+    sleeping: Boolean(data.sleeping),
+    sleepingUntil: Number(data.sleepingUntil ?? 0),
+    lastDecayAt: Number(data.lastDecayAt || Date.now()),
+    lastActionAt: Number(data.lastActionAt || Date.now()),
+    lastAction: (data.lastAction as PetAction | null) ?? null,
+  })
+}
+
+function asNote(id: string, data: Record<string, unknown>): LoveNote {
+  return {
+    id,
+    coupleId: String(data.coupleId || ''),
+    members: Array.isArray(data.members) ? (data.members as string[]) : [],
+    fromUid: String(data.fromUid || ''),
+    fromName: String(data.fromName || ''),
+    text: String(data.text || ''),
+    createdAt: Number(data.createdAt || 0),
+  }
+}
+
+function asWish(id: string, data: Record<string, unknown>): WishItem {
+  return {
+    id,
+    coupleId: String(data.coupleId || ''),
+    members: Array.isArray(data.members) ? (data.members as string[]) : [],
+    title: String(data.title || ''),
+    done: Boolean(data.done),
+    createdBy: String(data.createdBy || ''),
+    createdAt: Number(data.createdAt || 0),
+  }
+}
+
 function asCouple(id: string, data: Record<string, unknown>): Couple {
   const bfUid = String(data.bfUid || '')
   const gfUid = String(data.gfUid || '')
@@ -149,6 +198,18 @@ function asCouple(id: string, data: Record<string, unknown>): Couple {
     gfName: String(data.gfName || 'GF'),
     bfEmail: String(data.bfEmail || ''),
     gfEmail: String(data.gfEmail || ''),
+    bfNick: String(data.bfNick || data.bfName || 'BF'),
+    gfNick: String(data.gfNick || data.gfName || 'GF'),
+    anniversary: (data.anniversary as string | null) ?? null,
+    theme: data.theme === 'cyan' || data.theme === 'gold' ? data.theme : 'pink',
+    kisses: Number(data.kisses || 0),
+    hugs: Number(data.hugs || 0),
+    nudges: Number(data.nudges || 0),
+    loveScore: Number(data.loveScore || 0),
+    streak: Number(data.streak || 0),
+    lastCheckInBf: (data.lastCheckInBf as string | null) ?? null,
+    lastCheckInGf: (data.lastCheckInGf as string | null) ?? null,
+    pet: asPet(data.pet),
     createdAt: Number(data.createdAt || 0),
   }
 }
@@ -181,6 +242,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [partner, setPartner] = useState<UserProfile | null>(() => readCache('partner', null))
   const [events, setEvents] = useState<CoupleEvent[]>(() => readCache('events', []))
   const [logs, setLogs] = useState<ActivityLog[]>(() => readCache('logs', []))
+  const [notes, setNotes] = useState<LoveNote[]>(() => readCache('notes', []))
+  const [wishes, setWishes] = useState<WishItem[]>(() => readCache('wishes', []))
   const [invitationsIn, setInvitationsIn] = useState<Invitation[]>(() => readCache('invIn', []))
   const [invitationsOut, setInvitationsOut] = useState<Invitation[]>(() => readCache('invOut', []))
   const [notifications, setNotifications] = useState<AppNotification[]>(() => readCache('notifs', []))
@@ -272,6 +335,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
         partnerEmail: (data.partnerEmail as string | null) ?? null,
         partnerUid: (data.partnerUid as string | null) ?? null,
         notificationsEnabled: Boolean(data.notificationsEnabled),
+        notifyEvents: data.notifyEvents !== false,
+        notifyPet: data.notifyPet !== false,
+        notifyNotes: data.notifyNotes !== false,
+        quietStart: (data.quietStart as string | null) ?? null,
+        quietEnd: (data.quietEnd as string | null) ?? null,
+        uiTheme: data.uiTheme === 'cyan' || data.uiTheme === 'gold' ? data.uiTheme : 'pink',
         createdAt: Number(data.createdAt || 0),
       }
       setPartner(next)
@@ -307,9 +376,28 @@ export function DataProvider({ children }: { children: ReactNode }) {
       },
       (err) => pushToast(friendlyError(err)),
     )
+    const qNotes = query(collection(db, 'notes'), where('coupleId', '==', profile.coupleId))
+    const qWishes = query(collection(db, 'wishes'), where('coupleId', '==', profile.coupleId))
+    const u3 = onSnapshot(qNotes, (snap) => {
+      const rows = snap.docs
+        .map((d) => asNote(d.id, d.data() as Record<string, unknown>))
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, 30)
+      setNotes(rows)
+      writeCache('notes', rows)
+    })
+    const u4 = onSnapshot(qWishes, (snap) => {
+      const rows = snap.docs
+        .map((d) => asWish(d.id, d.data() as Record<string, unknown>))
+        .sort((a, b) => Number(a.done) - Number(b.done) || b.createdAt - a.createdAt)
+      setWishes(rows)
+      writeCache('wishes', rows)
+    })
     return () => {
       u1()
       u2()
+      u3()
+      u4()
     }
   }, [profile?.coupleId, pushToast])
 
@@ -542,7 +630,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   )
 
   const addEvent = useCallback(
-    async (input: NewEventInput) => {
+    async (input: EventInput) => {
       if (!user || !profile || !couple) throw new Error('Bond first')
       const title = input.title.trim()
       if (!title) throw new Error('NAME THE QUEST')
@@ -660,6 +748,180 @@ export function DataProvider({ children }: { children: ReactNode }) {
     [user, profile, couple, pushToast],
   )
 
+  const updateEvent = useCallback(
+    async (id: string, input: EventInput) => {
+      if (!user || !profile || !couple) throw new Error('Bond first')
+      const title = input.title.trim()
+      if (!title) throw new Error('NAME THE QUEST')
+      const startsAt = eventStart({ date: input.date, hour: input.hour }).getTime()
+      if (!Number.isFinite(startsAt)) throw new Error('INVALID DATE')
+      const members = await liveMembers(couple)
+      const patch = {
+        title,
+        theme: input.theme,
+        emoji: input.emoji,
+        date: input.date,
+        hour: input.hour || null,
+        assignedTo: input.assignedTo,
+        startsAt,
+        members,
+      }
+      try {
+        await updateDoc(doc(db, 'events', id), patch)
+        await addDoc(collection(db, 'logs'), {
+          coupleId: couple.id,
+          members,
+          actorUid: user.uid,
+          actorName: profile.displayName,
+          actorRole: profile.role,
+          message: `${profile.displayName} edited "${title}"`,
+          type: 'event_edit',
+          createdAt: Date.now(),
+        })
+      } catch (err) {
+        throw new Error(friendlyError(err))
+      }
+      if (profile.partnerUid) {
+        void notify(profile.partnerUid, 'QUEST UPDATED', `${profile.displayName} changed "${title}"`, 'event_decision')
+      }
+      pushToast('QUEST UPDATED')
+    },
+    [user, profile, couple, pushToast],
+  )
+
+  const deleteEvent = useCallback(
+    async (ev: CoupleEvent) => {
+      if (!user || !profile) throw new Error('Sign in first')
+      setEvents((prev) => prev.filter((item) => item.id !== ev.id))
+      try {
+        await deleteDoc(doc(db, 'events', ev.id))
+        const members = couple ? coupleMemberIds(couple) : ev.members
+        await addDoc(collection(db, 'logs'), {
+          coupleId: ev.coupleId,
+          members,
+          actorUid: user.uid,
+          actorName: profile.displayName,
+          actorRole: profile.role,
+          message: `${profile.displayName} erased "${ev.title}"`,
+          type: 'event_delete',
+          createdAt: Date.now(),
+        })
+      } catch (err) {
+        setEvents((prev) => [...prev, ev])
+        throw new Error(friendlyError(err))
+      }
+      if (profile.partnerUid) {
+        void notify(profile.partnerUid, 'QUEST ERASED', `${profile.displayName} deleted "${ev.title}"`, 'event_decision')
+      }
+      pushToast('QUEST ERASED')
+    },
+    [user, profile, couple, pushToast],
+  )
+
+  const updateCouple = useCallback(
+    async (patch: Record<string, unknown>) => {
+      if (!couple) throw new Error('Bond first')
+      await updateDoc(doc(db, 'couples', couple.id), patch)
+      pushToast('SAVED')
+    },
+    [couple, pushToast],
+  )
+
+  const carePet = useCallback(
+    async (action: PetAction) => {
+      if (!user || !profile || !couple) throw new Error('Bond first')
+      const pet = applyPetAction(couple.pet || defaultPet(), action)
+      await updateDoc(doc(db, 'couples', couple.id), { pet, loveScore: (couple.loveScore || 0) + 1 })
+      if (profile.partnerUid) {
+        const verb = action === 'feed' ? 'fed' : action === 'toilet' ? 'took to the toilet' : action === 'sleep' ? 'tucked in' : action === 'wake' ? 'woke' : 'played with'
+        void notify(profile.partnerUid, `${pet.name} UPDATE`, `${profile.displayName} ${verb} ${pet.name}`, 'pet')
+      }
+      pushToast(
+        action === 'feed' ? 'YUM · FROG FED' : action === 'toilet' ? 'FLUSHED' : action === 'sleep' ? 'NIGHT NIGHT' : action === 'wake' ? 'RISE AND SHINE' : 'PLAY TIME',
+      )
+      if (profile.notificationsEnabled && profile.notifyPet && Notification.permission === 'granted') {
+        try {
+          new Notification(`${couple.pet.name}`, { body: `You ${action}ed the wizard frog.`, icon: '/pet-frog.png' })
+        } catch {
+          // ignore
+        }
+      }
+    },
+    [user, profile, couple, pushToast],
+  )
+
+  const sendNote = useCallback(
+    async (text: string) => {
+      if (!user || !profile || !couple) throw new Error('Bond first')
+      const body = text.trim()
+      if (!body) throw new Error('WRITE A NOTE')
+      await addDoc(collection(db, 'notes'), {
+        coupleId: couple.id,
+        members: couple.members,
+        fromUid: user.uid,
+        fromName: profile.displayName,
+        text: body.slice(0, 230),
+        createdAt: Date.now(),
+      })
+      if (profile.partnerUid) void notify(profile.partnerUid, 'LOVE NOTE', `${profile.displayName}: ${body.slice(0, 80)}`, 'note')
+      pushToast('NOTE SENT')
+    },
+    [user, profile, couple, pushToast],
+  )
+
+  const addWish = useCallback(
+    async (title: string) => {
+      if (!user || !profile || !couple) throw new Error('Bond first')
+      const name = title.trim()
+      if (!name) throw new Error('NAME THE WISH')
+      await addDoc(collection(db, 'wishes'), {
+        coupleId: couple.id,
+        members: couple.members,
+        title: name.slice(0, 70),
+        done: false,
+        createdBy: user.uid,
+        createdAt: Date.now(),
+      })
+      pushToast('WISH ADDED')
+    },
+    [user, profile, couple, pushToast],
+  )
+
+  const toggleWish = useCallback(async (wish: WishItem) => {
+    await updateDoc(doc(db, 'wishes', wish.id), { done: !wish.done })
+  }, [])
+
+  const deleteWish = useCallback(async (wish: WishItem) => {
+    await deleteDoc(doc(db, 'wishes', wish.id))
+  }, [])
+
+  const sendLove = useCallback(
+    async (kind: 'kiss' | 'hug' | 'nudge') => {
+      if (!user || !profile || !couple) throw new Error('Bond first')
+      const field = kind === 'kiss' ? 'kisses' : kind === 'hug' ? 'hugs' : 'nudges'
+      await updateDoc(doc(db, 'couples', couple.id), {
+        [field]: (couple[field] || 0) + 1,
+        loveScore: (couple.loveScore || 0) + 2,
+      })
+      if (profile.partnerUid) {
+        void notify(profile.partnerUid, kind.toUpperCase(), `${profile.displayName} sent a ${kind}`, 'note')
+      }
+      pushToast(kind === 'kiss' ? 'MUAH' : kind === 'hug' ? 'SQUEEZE' : 'POKE')
+    },
+    [user, profile, couple, pushToast],
+  )
+
+  const checkIn = useCallback(async () => {
+    if (!user || !profile || !couple) throw new Error('Bond first')
+    const today = toISODate(new Date())
+    const mine = profile.role === 'bf' ? 'lastCheckInBf' : 'lastCheckInGf'
+    const theirs = profile.role === 'bf' ? couple.lastCheckInGf : couple.lastCheckInBf
+    const patch: Record<string, unknown> = { [mine]: today, loveScore: (couple.loveScore || 0) + 3 }
+    if (theirs === today) patch.streak = (couple.streak || 0) + 1
+    await updateDoc(doc(db, 'couples', couple.id), patch)
+    pushToast(theirs === today ? 'STREAK UP' : 'CHECKED IN · WAITING FOR YOUR LOVE')
+  }, [user, profile, couple, pushToast])
+
   const markNotificationRead = useCallback(async (id: string) => {
     await updateDoc(doc(db, 'notifications', id), { read: true })
   }, [])
@@ -684,6 +946,24 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return ok
   }, [patchProfile, pushToast])
 
+  useEffect(() => {
+    if (!couple?.pet || !profile?.notifyPet) return
+    const alerts = petAlerts(decayPet(couple.pet))
+    for (const a of alerts) {
+      const key = `pet:${a.key}:${toISODate(new Date())}`
+      if (sessionStorage.getItem(key)) continue
+      sessionStorage.setItem(key, '1')
+      pushToast(a.title)
+      if (profile.notificationsEnabled && Notification.permission === 'granted') {
+        try {
+          new Notification(a.title, { body: a.body, icon: '/pet-frog.png', tag: a.key })
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }, [couple?.pet, profile, pushToast])
+
   const pendingEventCount = events.filter(
     (ev) =>
       ev.status === 'pending' &&
@@ -698,6 +978,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
       partner,
       events,
       logs,
+      notes,
+      wishes,
       invitationsIn,
       invitationsOut,
       notifications,
@@ -711,16 +993,28 @@ export function DataProvider({ children }: { children: ReactNode }) {
       acceptInvite,
       declineInvite,
       addEvent,
+      updateEvent,
+      deleteEvent,
       acceptEvent,
       declineEvent,
       markNotificationRead,
       enableAlerts,
+      carePet,
+      sendNote,
+      addWish,
+      toggleWish,
+      deleteWish,
+      sendLove,
+      checkIn,
+      updateCouple,
     }),
     [
       couple,
       partner,
       events,
       logs,
+      notes,
+      wishes,
       invitationsIn,
       invitationsOut,
       notifications,
@@ -734,10 +1028,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
       acceptInvite,
       declineInvite,
       addEvent,
+      updateEvent,
+      deleteEvent,
       acceptEvent,
       declineEvent,
       markNotificationRead,
       enableAlerts,
+      carePet,
+      sendNote,
+      addWish,
+      toggleWish,
+      deleteWish,
+      sendLove,
+      checkIn,
+      updateCouple,
     ],
   )
 

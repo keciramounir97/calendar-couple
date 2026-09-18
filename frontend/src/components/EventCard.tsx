@@ -24,9 +24,14 @@ export function EventCard({ event }: { event: CoupleEvent }) {
         <span className="muted">BY {event.createdByName}</span>
         {event.status === 'pending' ? <span className="chip chip-wait">WAITING</span> : null}
       </div>
-      <Link className="tiny-link" to="/month">
-        OPEN MONTH MAP
-      </Link>
+      <div className="row">
+        <Link className="tiny-link" to={`/event/${event.id}`}>
+          OPEN
+        </Link>
+        <Link className="tiny-link" to={`/add?id=${event.id}`}>
+          EDIT
+        </Link>
+      </div>
     </article>
   )
 }
