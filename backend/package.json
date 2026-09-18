@@ -1,0 +1,10 @@
+{
+  "name": "calendar-couple-backend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Firestore rules, indexes, and couple-app domain logic for the Spark/free Firebase plan.",
+  "scripts": {
+    "check": "node src/index.js"
+  }
+}

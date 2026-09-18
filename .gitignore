@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.firebase/
+.vite/
+*.log
+.env
+.env.local
+.DS_Store
+coverage/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+serviceAccount*.json
+*.cache
+frontend/dev-dist/
