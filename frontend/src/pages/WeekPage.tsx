@@ -5,7 +5,7 @@ import { PixelButton } from '../components/PixelButton'
 import { PixelEmoji } from '../components/PixelEmoji'
 import { useAuth } from '../context/AuthContext'
 import { useData } from '../context/DataContext'
-import { addWeeks, eventIsPast, isSameDay, toISODate, weekDays, WEEKDAYS, weekRangeLabel } from '../lib/dates'
+import { addWeeks, isSameDay, showOnCalendar, toISODate, weekDays, WEEKDAYS, weekRangeLabel } from '../lib/dates'
 
 export function WeekPage() {
   const { profile } = useAuth()
@@ -14,7 +14,7 @@ export function WeekPage() {
   const [cursor, setCursor] = useState(() => new Date())
   const days = useMemo(() => weekDays(cursor), [cursor])
   const today = new Date()
-  const visible = events.filter((ev) => ev.status !== 'declined' && !eventIsPast(ev) && (ev.status === 'confirmed' || ev.createdBy === profile?.uid))
+  const visible = events.filter((ev) => showOnCalendar(ev, profile?.uid))
 
   return (
     <div className="cal-page">

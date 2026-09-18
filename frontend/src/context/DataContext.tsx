@@ -22,7 +22,9 @@ import {
 } from 'react'
 import { db } from '../firebase'
 import { readCache, writeCache } from '../lib/cache'
-import { eventIsPast, eventStart } from '../lib/dates'
+import { eventIsExpired, eventStart } from '../lib/dates'
+import { friendlyError } from '../lib/errors'
+import { coupleMemberIds } from '../lib/members'
 import { emailDocId, normalizeEmail, roleLabel } from '../lib/roles'
 import type {
   ActivityLog,
@@ -134,7 +136,25 @@ function asNotif(id: string, data: Record<string, unknown>): AppNotification {
   }
 }
 
+function asCouple(id: string, data: Record<string, unknown>): Couple {
+  const bfUid = String(data.bfUid || '')
+  const gfUid = String(data.gfUid || '')
+  const listed = Array.isArray(data.members) ? (data.members as string[]) : []
+  return {
+    id,
+    members: coupleMemberIds({ bfUid, gfUid, members: listed }),
+    bfUid,
+    gfUid,
+    bfName: String(data.bfName || 'BF'),
+    gfName: String(data.gfName || 'GF'),
+    bfEmail: String(data.bfEmail || ''),
+    gfEmail: String(data.gfEmail || ''),
+    createdAt: Number(data.createdAt || 0),
+  }
+}
+
 async function notify(userId: string, title: string, body: string, type: AppNotification['type']) {
+  if (!userId) return
   await addDoc(collection(db, 'notifications'), {
     userId,
     title,
@@ -143,6 +163,16 @@ async function notify(userId: string, title: string, body: string, type: AppNoti
     read: false,
     createdAt: Date.now(),
   })
+}
+
+async function liveMembers(couple: Couple) {
+  try {
+    const snap = await getDoc(doc(db, 'couples', couple.id))
+    if (snap.exists()) return coupleMemberIds(asCouple(snap.id, snap.data() as Record<string, unknown>))
+  } catch {
+    // use local couple
+  }
+  return coupleMemberIds(couple)
 }
 
 export function DataProvider({ children }: { children: ReactNode }) {
@@ -157,6 +187,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<string[]>([])
   const seenNotifs = useRef(new Set<string>())
   const nagTick = useRef(0)
+  const cleaned = useRef(new Set<string>())
 
   const pushToast = useCallback((msg: string) => {
     setToasts((prev) => [...prev.slice(-3), msg])
@@ -169,56 +200,65 @@ export function DataProvider({ children }: { children: ReactNode }) {
     if (!user || !profile) return
     const qIn = query(collection(db, 'invitations'), where('toEmail', '==', profile.email))
     const qOut = query(collection(db, 'invitations'), where('fromUid', '==', user.uid))
-    const u1 = onSnapshot(qIn, (snap) => {
-      const rows = snap.docs.map((d) => asInvite(d.id, d.data() as Record<string, unknown>))
-      setInvitationsIn(rows)
-      writeCache('invIn', rows)
-    })
-    const u2 = onSnapshot(qOut, (snap) => {
-      const rows = snap.docs.map((d) => asInvite(d.id, d.data() as Record<string, unknown>))
-      setInvitationsOut(rows)
-      writeCache('invOut', rows)
-    })
+    const u1 = onSnapshot(
+      qIn,
+      (snap) => {
+        const rows = snap.docs.map((d) => asInvite(d.id, d.data() as Record<string, unknown>))
+        setInvitationsIn(rows)
+        writeCache('invIn', rows)
+      },
+      (err) => pushToast(friendlyError(err)),
+    )
+    const u2 = onSnapshot(
+      qOut,
+      (snap) => {
+        const rows = snap.docs.map((d) => asInvite(d.id, d.data() as Record<string, unknown>))
+        setInvitationsOut(rows)
+        writeCache('invOut', rows)
+      },
+      (err) => pushToast(friendlyError(err)),
+    )
     return () => {
       u1()
       u2()
     }
-  }, [user, profile])
+  }, [user, profile, pushToast])
 
   useEffect(() => {
-    if (!user || !profile?.coupleId) {
-      if (!profile?.coupleId) {
-        setCouple(null)
-        setEvents([])
-        setLogs([])
-      }
-      return
-    }
-    const unsub = onSnapshot(doc(db, 'couples', profile.coupleId), (snap) => {
-      if (!snap.exists()) return
-      const data = snap.data() as Record<string, unknown>
-      const next: Couple = {
-        id: snap.id,
-        members: Array.isArray(data.members) ? (data.members as string[]) : [],
-        bfUid: String(data.bfUid || ''),
-        gfUid: String(data.gfUid || ''),
-        bfName: String(data.bfName || 'BF'),
-        gfName: String(data.gfName || 'GF'),
-        bfEmail: String(data.bfEmail || ''),
-        gfEmail: String(data.gfEmail || ''),
-        createdAt: Number(data.createdAt || 0),
-      }
+    if (!user || profile?.coupleId) return
+    const q = query(collection(db, 'couples'), where('members', 'array-contains', user.uid))
+    return onSnapshot(q, (snap) => {
+      const found = snap.docs[0]
+      if (!found) return
+      const next = asCouple(found.id, found.data() as Record<string, unknown>)
+      const partnerUid = next.bfUid === user.uid ? next.gfUid : next.bfUid
+      const partnerEmail = next.bfUid === user.uid ? next.gfEmail : next.bfEmail
       setCouple(next)
       writeCache('couple', next)
+      void patchProfile({ coupleId: next.id, partnerUid, partnerEmail })
     })
-    return unsub
-  }, [user, profile?.coupleId])
+  }, [user, profile?.coupleId, patchProfile])
 
   useEffect(() => {
-    if (!profile?.coupleId || !profile.partnerUid) {
-      setPartner(null)
-      return
-    }
+    if (!user || !profile?.coupleId) return
+    const unsub = onSnapshot(
+      doc(db, 'couples', profile.coupleId),
+      (snap) => {
+        if (!snap.exists()) return
+        const next = asCouple(snap.id, snap.data() as Record<string, unknown>)
+        setCouple(next)
+        writeCache('couple', next)
+        if (next.members.length >= 2 && (snap.data().members || []).length < 2) {
+          void updateDoc(snap.ref, { members: next.members }).catch(() => {})
+        }
+      },
+      (err) => pushToast(friendlyError(err)),
+    )
+    return unsub
+  }, [user, profile?.coupleId, pushToast])
+
+  useEffect(() => {
+    if (!profile?.coupleId || !profile.partnerUid) return
     const unsub = onSnapshot(doc(db, 'users', profile.partnerUid), (snap) => {
       if (!snap.exists()) return
       const data = snap.data() as Record<string, unknown>
@@ -244,26 +284,34 @@ export function DataProvider({ children }: { children: ReactNode }) {
     if (!profile?.coupleId) return
     const qEv = query(collection(db, 'events'), where('coupleId', '==', profile.coupleId))
     const qLog = query(collection(db, 'logs'), where('coupleId', '==', profile.coupleId))
-    const u1 = onSnapshot(qEv, (snap) => {
-      const rows = snap.docs
-        .map((d) => asEvent(d.id, d.data() as Record<string, unknown>))
-        .sort((a, b) => a.startsAt - b.startsAt)
-      setEvents(rows)
-      writeCache('events', rows)
-    })
-    const u2 = onSnapshot(qLog, (snap) => {
-      const rows = snap.docs
-        .map((d) => asLog(d.id, d.data() as Record<string, unknown>))
-        .sort((a, b) => b.createdAt - a.createdAt)
-        .slice(0, 40)
-      setLogs(rows)
-      writeCache('logs', rows)
-    })
+    const u1 = onSnapshot(
+      qEv,
+      (snap) => {
+        const rows = snap.docs
+          .map((d) => asEvent(d.id, d.data() as Record<string, unknown>))
+          .sort((a, b) => a.startsAt - b.startsAt || a.createdAt - b.createdAt)
+        setEvents(rows)
+        writeCache('events', rows)
+      },
+      (err) => pushToast(friendlyError(err)),
+    )
+    const u2 = onSnapshot(
+      qLog,
+      (snap) => {
+        const rows = snap.docs
+          .map((d) => asLog(d.id, d.data() as Record<string, unknown>))
+          .sort((a, b) => b.createdAt - a.createdAt)
+          .slice(0, 40)
+        setLogs(rows)
+        writeCache('logs', rows)
+      },
+      (err) => pushToast(friendlyError(err)),
+    )
     return () => {
       u1()
       u2()
     }
-  }, [profile?.coupleId])
+  }, [profile?.coupleId, pushToast])
 
   useEffect(() => {
     if (!user) return
@@ -296,9 +344,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const members = (couple?.members ?? [profile.uid]).slice().sort()
     const cleaner = members[0] || profile.uid
     if (profile.uid !== cleaner) return
-    const past = events.filter((ev) => eventIsPast(ev)).slice(0, 10)
-    if (!past.length) return
-    void Promise.all(past.map((ev) => deleteDoc(doc(db, 'events', ev.id)).catch(() => {})))
+    const expired = events.filter((ev) => eventIsExpired(ev) && Date.now() - ev.createdAt > 120000).slice(0, 10)
+    const todo = expired.filter((ev) => !cleaned.current.has(ev.id))
+    if (!todo.length) return
+    todo.forEach((ev) => cleaned.current.add(ev.id))
+    const t = window.setTimeout(() => {
+      void Promise.all(todo.map((ev) => deleteDoc(doc(db, 'events', ev.id)).catch(() => {})))
+    }, 2500)
+    return () => window.clearTimeout(t)
   }, [events, profile, couple])
 
   const needsPartnerEmail = Boolean(profile && !profile.coupleId && !profile.partnerEmail)
@@ -346,7 +399,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!profile?.notificationsEnabled) return
     const timers: number[] = []
-    const upcoming = events.filter((ev) => ev.status === 'confirmed' && ev.hour && !eventIsPast(ev))
+    const upcoming = events.filter((ev) => ev.status === 'confirmed' && ev.hour && !eventIsExpired(ev))
     for (const ev of upcoming) {
       const start = eventStart(ev).getTime()
       const fire = (when: number, title: string) => {
@@ -402,7 +455,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       await addDoc(collection(db, 'invitations'), payload)
       await patchProfile({ partnerEmail: toEmail })
       if (toUid) {
-        await notify(
+        void notify(
           toUid,
           'COUPLE INVITE',
           `${profile.displayName} (${roleLabel(profile.role)}) wants to bond timelines`,
@@ -429,8 +482,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
       if (inv.fromRole === profile.role) throw new Error('Need one BF and one GF')
       const coupleRef = doc(collection(db, 'couples'))
       const bf = profile.role === 'bf'
+      const members = [inv.fromUid, user.uid]
       const coupleDoc = {
-        members: [inv.fromUid, user.uid],
+        members,
         bfUid: bf ? user.uid : inv.fromUid,
         gfUid: bf ? inv.fromUid : user.uid,
         bfName: bf ? profile.displayName : inv.fromName,
@@ -460,7 +514,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       const logRef = doc(collection(db, 'logs'))
       batch.set(logRef, {
         coupleId: coupleRef.id,
-        members: coupleDoc.members,
+        members,
         actorUid: user.uid,
         actorName: profile.displayName,
         actorRole: profile.role,
@@ -469,7 +523,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
       })
       await batch.commit()
-      await notify(inv.fromUid, 'BOND ACCEPTED', `${profile.displayName} said YES. Timelines are linked.`, 'bond')
+      setCouple(asCouple(coupleRef.id, coupleDoc as unknown as Record<string, unknown>))
+      writeCache('couple', asCouple(coupleRef.id, coupleDoc as unknown as Record<string, unknown>))
+      void notify(inv.fromUid, 'BOND ACCEPTED', `${profile.displayName} said YES. Timelines are linked.`, 'bond')
       pushToast('GREEN CHECK · YOU ARE A COUPLE')
     },
     [user, profile, pushToast],
@@ -479,7 +535,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     async (inv: Invitation) => {
       if (!user || !profile) return
       await updateDoc(doc(db, 'invitations', inv.id), { status: 'declined', toUid: user.uid, toRole: profile.role })
-      await notify(inv.fromUid, 'INVITE DECLINED', `${profile.displayName} hit the red X.`, 'invite')
+      void notify(inv.fromUid, 'INVITE DECLINED', `${profile.displayName} hit the red X.`, 'invite')
       pushToast('RED X · INVITE DECLINED')
     },
     [user, profile, pushToast],
@@ -488,17 +544,24 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const addEvent = useCallback(
     async (input: NewEventInput) => {
       if (!user || !profile || !couple) throw new Error('Bond first')
+      const title = input.title.trim()
+      if (!title) throw new Error('NAME THE QUEST')
       const assignedTo = input.assignedTo
       const needsAccept = assignedTo !== profile.role
       const startsAt = eventStart({ date: input.date, hour: input.hour }).getTime()
+      if (!Number.isFinite(startsAt)) throw new Error('INVALID DATE')
+      const members = await liveMembers(couple)
+      if (!members.includes(user.uid)) members.push(user.uid)
+      if (members.length < 2) throw new Error('COUPLE BOND INCOMPLETE · REOPEN AND RETRY')
+      const eventRef = doc(collection(db, 'events'))
       const eventDoc = {
         coupleId: couple.id,
-        members: couple.members,
-        title: input.title.trim(),
+        members,
+        title,
         theme: input.theme,
         emoji: input.emoji,
         date: input.date,
-        hour: input.hour,
+        hour: input.hour || null,
         assignedTo,
         status: needsAccept ? 'pending' : 'confirmed',
         createdBy: user.uid,
@@ -507,68 +570,94 @@ export function DataProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
         startsAt,
       }
-      await addDoc(collection(db, 'events'), eventDoc)
-      await addDoc(collection(db, 'logs'), {
-        coupleId: couple.id,
-        members: couple.members,
-        actorUid: user.uid,
-        actorName: profile.displayName,
-        actorRole: profile.role,
-        message: `${profile.displayName} (${roleLabel(profile.role)}) added "${input.title.trim()}"`,
-        type: 'event_add',
-        createdAt: Date.now(),
-      })
+      const local: CoupleEvent = { id: eventRef.id, ...eventDoc, status: eventDoc.status as CoupleEvent['status'] }
+      setEvents((prev) => [...prev.filter((e) => e.id !== local.id), local].sort((a, b) => a.startsAt - b.startsAt))
+      writeCache('events', [...events.filter((e) => e.id !== local.id), local])
+      try {
+        const batch = writeBatch(db)
+        batch.set(eventRef, eventDoc)
+        batch.set(doc(collection(db, 'logs')), {
+          coupleId: couple.id,
+          members,
+          actorUid: user.uid,
+          actorName: profile.displayName,
+          actorRole: profile.role,
+          message: `${profile.displayName} (${roleLabel(profile.role)}) added "${title}"`,
+          type: 'event_add',
+          createdAt: Date.now(),
+        })
+        await batch.commit()
+      } catch (err) {
+        setEvents((prev) => prev.filter((e) => e.id !== local.id))
+        throw new Error(friendlyError(err))
+      }
       if (needsAccept && profile.partnerUid) {
-        await notify(
+        void notify(
           profile.partnerUid,
           'NEW QUEST FOR YOU',
-          `${profile.displayName} proposed "${input.title.trim()}". Check or X it.`,
+          `${profile.displayName} proposed "${title}". Check or X it.`,
           'event_proposal',
         )
       }
-      pushToast(needsAccept ? 'SENT TO PARTNER · WAITING CHECK' : 'QUEST SAVED')
+      pushToast(needsAccept ? 'SENT TO PARTNER · WAITING CHECK' : 'QUEST SAVED TO CALENDAR')
     },
-    [user, profile, couple, pushToast],
+    [user, profile, couple, events, pushToast],
   )
 
   const acceptEvent = useCallback(
     async (ev: CoupleEvent) => {
-      if (!user || !profile) return
-      await updateDoc(doc(db, 'events', ev.id), { status: 'confirmed' })
-      await addDoc(collection(db, 'logs'), {
-        coupleId: ev.coupleId,
-        members: ev.members,
-        actorUid: user.uid,
-        actorName: profile.displayName,
-        actorRole: profile.role,
-        message: `${profile.displayName} accepted "${ev.title}"`,
-        type: 'event_accept',
-        createdAt: Date.now(),
-      })
-      await notify(ev.createdBy, 'QUEST ACCEPTED', `${profile.displayName} checked YES on "${ev.title}"`, 'event_decision')
+      if (!user || !profile) throw new Error('Sign in first')
+      const members = couple ? await liveMembers(couple) : coupleMemberIds({ bfUid: '', gfUid: '', members: ev.members }, [user.uid, ev.createdBy])
+      setEvents((prev) => prev.map((item) => (item.id === ev.id ? { ...item, status: 'confirmed' } : item)))
+      try {
+        const batch = writeBatch(db)
+        batch.update(doc(db, 'events', ev.id), { status: 'confirmed', members })
+        batch.set(doc(collection(db, 'logs')), {
+          coupleId: ev.coupleId,
+          members,
+          actorUid: user.uid,
+          actorName: profile.displayName,
+          actorRole: profile.role,
+          message: `${profile.displayName} accepted "${ev.title}"`,
+          type: 'event_accept',
+          createdAt: Date.now(),
+        })
+        await batch.commit()
+      } catch (err) {
+        setEvents((prev) => prev.map((item) => (item.id === ev.id ? { ...item, status: ev.status } : item)))
+        throw new Error(friendlyError(err))
+      }
+      void notify(ev.createdBy, 'QUEST ACCEPTED', `${profile.displayName} checked YES on "${ev.title}"`, 'event_decision')
       pushToast('GREEN CHECK · ADDED TO CALENDAR')
     },
-    [user, profile, pushToast],
+    [user, profile, couple, pushToast],
   )
 
   const declineEvent = useCallback(
     async (ev: CoupleEvent) => {
-      if (!user || !profile) return
-      await deleteDoc(doc(db, 'events', ev.id))
-      await addDoc(collection(db, 'logs'), {
-        coupleId: ev.coupleId,
-        members: ev.members,
-        actorUid: user.uid,
-        actorName: profile.displayName,
-        actorRole: profile.role,
-        message: `${profile.displayName} declined "${ev.title}"`,
-        type: 'event_decline',
-        createdAt: Date.now(),
-      })
-      await notify(ev.createdBy, 'QUEST DECLINED', `${profile.displayName} hit the red X on "${ev.title}"`, 'event_decision')
+      if (!user || !profile) throw new Error('Sign in first')
+      setEvents((prev) => prev.filter((item) => item.id !== ev.id))
+      try {
+        await deleteDoc(doc(db, 'events', ev.id))
+        const members = couple ? coupleMemberIds(couple) : ev.members
+        await addDoc(collection(db, 'logs'), {
+          coupleId: ev.coupleId,
+          members,
+          actorUid: user.uid,
+          actorName: profile.displayName,
+          actorRole: profile.role,
+          message: `${profile.displayName} declined "${ev.title}"`,
+          type: 'event_decline',
+          createdAt: Date.now(),
+        })
+      } catch (err) {
+        setEvents((prev) => [...prev, ev])
+        throw new Error(friendlyError(err))
+      }
+      void notify(ev.createdBy, 'QUEST DECLINED', `${profile.displayName} hit the red X on "${ev.title}"`, 'event_decision')
       pushToast('RED X · NOT ADDED')
     },
-    [user, profile, pushToast],
+    [user, profile, couple, pushToast],
   )
 
   const markNotificationRead = useCallback(async (id: string) => {

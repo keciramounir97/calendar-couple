@@ -1,5 +1,4 @@
 import { initializeApp } from 'firebase/app'
-import { getAnalytics, isSupported } from 'firebase/analytics'
 import { getAuth, GoogleAuthProvider } from 'firebase/auth'
 import {
   getFirestore,
@@ -23,6 +22,7 @@ export const app = initializeApp(firebaseConfig)
 function makeDb() {
   try {
     return initializeFirestore(app, {
+      ignoreUndefinedProperties: true,
       localCache: persistentLocalCache({
         tabManager: persistentMultipleTabManager(),
       }),
@@ -37,8 +37,13 @@ export const auth = getAuth(app)
 export const googleProvider = new GoogleAuthProvider()
 googleProvider.setCustomParameters({ prompt: 'select_account' })
 
-isSupported()
-  .then((yes) => {
-    if (yes) getAnalytics(app)
-  })
-  .catch(() => {})
+const idle = (cb: () => void) => {
+  window.setTimeout(cb, 800)
+}
+idle(() => {
+  void import('firebase/analytics')
+    .then(async ({ getAnalytics, isSupported }) => {
+      if (await isSupported()) getAnalytics(app)
+    })
+    .catch(() => {})
+})

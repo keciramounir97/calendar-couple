@@ -121,7 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         uid: user.uid,
         email: normalizeEmail(user.email),
         displayName: name,
-        photoURL: user.photoURL,
+        photoURL: user.photoURL || null,
         role,
         coupleId: existing.exists() ? (existing.data().coupleId ?? null) : null,
         partnerEmail: existing.exists() ? (existing.data().partnerEmail ?? null) : null,

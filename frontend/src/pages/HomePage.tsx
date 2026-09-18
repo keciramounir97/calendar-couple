@@ -11,7 +11,7 @@ export function HomePage() {
   const { events, logs, couple } = useData()
   const upcoming = events
     .filter((ev) => ev.status !== 'declined' && !eventIsPast(ev))
-    .filter((ev) => ev.status === 'confirmed' || ev.createdBy === profile?.uid)
+    .filter((ev) => ev.status === 'confirmed' || ev.createdBy === profile?.uid || ev.assignedTo === profile?.role || ev.assignedTo === 'both')
     .sort((a, b) => a.startsAt - b.startsAt)
 
   return (

@@ -1,4 +1,4 @@
-const KEY = 'ccache:v1'
+const KEY = 'ccache:v2'
 
 export function readCache<T>(name: string, fallback: T): T {
   try {

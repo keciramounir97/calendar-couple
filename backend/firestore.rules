@@ -17,14 +17,31 @@ service cloud.firestore {
       return signedIn() && uid == me();
     }
 
-    function memberOf(data) {
-      return signedIn() && me() in data.members;
+    function coupleData(coupleId) {
+      return get(/databases/$(database)/documents/couples/$(coupleId)).data;
+    }
+
+    function isCoupleMember(coupleId) {
+      return signedIn()
+        && coupleId is string
+        && exists(/databases/$(database)/documents/couples/$(coupleId))
+        && (
+          coupleData(coupleId).bfUid == me()
+          || coupleData(coupleId).gfUid == me()
+        );
+    }
+
+    function listedMember(data) {
+      return signedIn()
+        && 'members' in data
+        && data.members is list
+        && me() in data.members;
     }
 
     match /users/{uid} {
       allow read: if isSelf(uid)
         || (signedIn()
-            && resource.data.coupleId != null
+            && resource.data.coupleId is string
             && get(/databases/$(database)/documents/users/$(me())).data.coupleId == resource.data.coupleId);
       allow create: if isSelf(uid)
         && request.resource.data.uid == me()
@@ -58,30 +75,37 @@ service cloud.firestore {
     }
 
     match /couples/{id} {
-      allow read: if memberOf(resource.data);
+      allow read: if signedIn() && (
+        resource.data.bfUid == me()
+        || resource.data.gfUid == me()
+        || listedMember(resource.data)
+      );
       allow create: if signedIn()
-        && me() in request.resource.data.members
-        && request.resource.data.members.size() == 2;
-      allow update: if memberOf(resource.data);
+        && (request.resource.data.bfUid == me() || request.resource.data.gfUid == me());
+      allow update: if signedIn() && (
+        resource.data.bfUid == me()
+        || resource.data.gfUid == me()
+        || listedMember(resource.data)
+      );
       allow delete: if false;
     }
 
     match /events/{id} {
-      allow read: if memberOf(resource.data);
+      allow read: if isCoupleMember(resource.data.coupleId) || listedMember(resource.data);
       allow create: if signedIn()
-        && me() in request.resource.data.members
         && request.resource.data.createdBy == me()
         && request.resource.data.title is string
         && request.resource.data.title.size() > 0
-        && request.resource.data.title.size() < 80;
-      allow update, delete: if memberOf(resource.data);
+        && request.resource.data.title.size() < 80
+        && isCoupleMember(request.resource.data.coupleId);
+      allow update, delete: if isCoupleMember(resource.data.coupleId) || listedMember(resource.data);
     }
 
     match /logs/{id} {
-      allow read: if memberOf(resource.data);
+      allow read: if isCoupleMember(resource.data.coupleId) || listedMember(resource.data);
       allow create: if signedIn()
-        && me() in request.resource.data.members
-        && request.resource.data.actorUid == me();
+        && request.resource.data.actorUid == me()
+        && isCoupleMember(request.resource.data.coupleId);
       allow update, delete: if false;
     }
 

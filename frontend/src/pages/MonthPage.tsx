@@ -7,10 +7,10 @@ import { useAuth } from '../context/AuthContext'
 import { useData } from '../context/DataContext'
 import {
   addMonths,
-  eventIsPast,
   isSameDay,
   monthGrid,
   monthLabel,
+  showOnCalendar,
   startOfMonth,
   toISODate,
   WEEKDAYS,
@@ -24,7 +24,7 @@ export function MonthPage() {
   const days = useMemo(() => monthGrid(cursor), [cursor])
   const today = new Date()
 
-  const visible = events.filter((ev) => ev.status !== 'declined' && !eventIsPast(ev) && (ev.status === 'confirmed' || ev.createdBy === profile?.uid))
+  const visible = events.filter((ev) => showOnCalendar(ev, profile?.uid))
 
   return (
     <div className="cal-page">

@@ -74,4 +74,17 @@ export default defineConfig({
     port: 5173,
     host: true,
   },
+  build: {
+    chunkSizeWarningLimit: 900,
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            { name: 'firebase', test: /node_modules[\\/](?:@?firebase)/ },
+            { name: 'react-vendor', test: /node_modules[\\/](?:react|react-dom|react-router)/ },
+          ],
+        },
+      },
+    },
+  },
 })
